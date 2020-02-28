@@ -1,0 +1,135 @@
+service: pr-optin-webhook-v2
+
+plugins: 
+  - serverless-dotenv-plugin
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  region: ${env:REGION}
+  stage: ${env:STAGE}
+
+resources:
+ Resources:
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: pr-optin-webhook-v2
+  GatewayRole:
+    Type: AWS::IAM::Role ## TODO: i just deleted the Fn::Join: here to try to move on - i have to come back to this
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - apigateway.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: GatewayRolePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+               - sns:Publish
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - logs:PutLogEvents
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+              Resource: "*"
+  ApiGatewayGETMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      RequestParameters:
+        method.request.querystring.message: false
+        method.request.querystring.topic: false
+      Integration:
+        Type: AWS
+        Credentials:
+          Fn::GetAtt: [ GatewayRole, Arn ]
+        Uri:
+          Fn::Join:
+            - ""
+            - - "arn:aws:apigateway:"
+              - Ref: AWS::Region
+              - ":sns:action/Publish"
+        IntegrationHttpMethod: GET
+        RequestParameters:
+          integration.request.querystring.TopicArn: "method.request.querystring.topic"
+          integration.request.querystring.Message: "method.request.querystring.message"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: '{"status":"OK"}'
+      MethodResponses:
+        - StatusCode: 200
+      ResourceId:
+        Fn::GetAtt: [ ApiGatewayRestApi , RootResourceId ]
+      RestApiId: !Ref ApiGatewayRestApi 
+
+  SnsWebHookTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TopicName: "SnsWebHookTopic"
+
+  LeadQueue:
+    Type: "AWS::SQS::Queue"
+    Properties: 
+      QueueName: "LeadQueue"
+
+  LeadQueueTwo:
+    Type: "AWS::SQS::Queue"
+    Properties:
+      QueueName: "LeadQueueTwo"
+  
+  DeadLetterQueue:
+    Type: "AWS::SQS::Queue"
+    Properties: 
+      QueueName: "DeadLetterQueue"
+
+  SnsWebhookSubscriptionOne:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      TopicArn: !Ref SnsWebHookTopic
+      Endpoint: !GetAtt
+        - LeadQueue
+        - Arn
+      Protocol: sqs
+      RawMessageDelivery: 'true'
+
+  SnsWebhookSubscriptionTwo:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      TopicArn: !Ref SnsWebHookTopic
+      Endpoint: !GetAtt
+        - LeadQueueTwo
+        - Arn
+      Protocol: sqs
+      RawMessageDelivery: 'true'
+
+  PermissionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: optin-execution-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal: 
+              Service:
+                - apigateway.amazonaws.com
+                - lambda.amazonaws.com
+                - sns.amazonaws.com
+                - sqs.amazonaws.com
+            
+
